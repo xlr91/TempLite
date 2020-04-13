@@ -4,19 +4,41 @@ import RPi.GPIO as GPIO
 import time
 from darksky.api import DarkSky, DarkSkyAsync
 from darksky.types import languages, units, weather
+#from apscheduler.schedulers.blocking import BlockingScheduler
 
-SDI   = 17
-RCLK  = 18
-SRCLK = 27
-ButtonPin = 25
 
+
+class ButtonHandler:
+    """Class that handles buttons. Paired with a TemperatureHandler object"""
+    def __init__(self):
+        self.ButtonPin = 25
+        GPIO.setup(self.ButtonPin, GPIO.IN)
+        self.buttonstate = 0
+
+        #button states
+        #0 = off
+        #1 = probe
+        #2 = darksky
+
+    def checkinput(self):
+        """
+        Checks if button is pressed or not
+        If pressed, increments flag in the paired TemperatureHandler object"""
+        if GPIO.input(self.ButtonPin) == False:
+            self.buttonstate += 1
+            self.buttonstate = self.buttonstate % 3 #update modulus if more options pop up
+            time.sleep(0.5)
+
+    def call_state(self):
+        """Public method returning the current buttonstate"""
+        return self.buttonstate
 
 class TemperatureHandler:
     """
     Class used to handle grabbing of Temperatures and Weather Data
     Uses Temperature Probe and DarkSky API
     """
-    def __init__(self):
+    def __init__(self, pairedbutton):
         self.base_dir = '/sys/bus/w1/devices/'
         self.device_folder = glob.glob(self.base_dir + '28*')[0]
         self.device_file = self.device_folder + '/w1_slave'
@@ -28,7 +50,9 @@ class TemperatureHandler:
         self.probetemp = 0
         self.forecast = 0
 
-        self.tempflag = 0 #[0 = probe, 1 = DarkSky]
+        self.probeflag = True
+
+        self.pairedbutton = pairedbutton
     
     def _probe_temp_raw(self):
         """Reads the raw data file from the probe"""
@@ -73,27 +97,33 @@ class TemperatureHandler:
         """Public method to access probe's temp"""
         self.probetemp = self._probe_temp()
 
-    def increment_flag(self, u):
-        """Public method to increment temperature flag"""
-        self.tempflag += u
-        self.tempflag = self.tempflag % 2 #update the 2 if more optoins pop up
-
-    def update_flag(self, val):
+    def update_flag(self, boolean):
         """Public method to manually update temperature flag if needed"""
-        self.tempflag = val
+        self.probeflag = boolean
 
     def call_temp(self):
         """Returns current temperature, based on current flag"""
-        if self.tempflag == 0:
+        if self.pairedbutton.call_state() == 1:
+            self.probeflag = True
+        elif self.pairedbutton.call_state() == 2:
+            self.probeflag = False
+
+        if self.probeflag == True:
             return self.probetemp
-        elif self.tempflag == 1:
+        elif self.probeflag == False:
             return self.forecast.currently.apparent_temperature
 
     def call_precip_prob(self):
-        return self.forecast.daily.precip_probability
+        """public method returning precip prob of today"""
+        return self.forecast.daily.data[0].precip_probability
 
-    def call_flag(self):
-        return self.tempflag
+    def call_probeflag(self):
+        """public method returning probe flag value"""
+        return self.probeflag
+    
+    def call_alerts(self):
+        """public method returning any DarkSky Alerts"""
+        return self.forecast.alerts
 
 class LEDHandler:
     """Class that handles lighting up the LEDs"""
@@ -102,8 +132,6 @@ class LEDHandler:
         self.RCLK  = 18
         self.SRCLK = 27
 
-        GPIO.setmode(GPIO.BCM)    # Number GPIOs by BCM
-        GPIO.setwarnings(False)
         GPIO.setup(self.SDI, GPIO.OUT)
         GPIO.setup(self.RCLK, GPIO.OUT)
         GPIO.setup(self.SRCLK, GPIO.OUT)
@@ -133,40 +161,41 @@ class LEDHandler:
         self._hc595_in(dat)
         self._hc595_out()
 
-class ButtonHandler:
-    """Class that handles buttons. Paired with a TemperatureHandler object"""
-    def __init__(self, TempHandler):
-        self.ButtonPin = 25
-        GPIO.setup(ButtonPin, GPIO.IN)
-        
-        self.paired = TempHandler
+#sched = BlockingScheduler()
 
-    def checkinput(self):
-        """
-        Checks if button is pressed or not
-        If pressed, increments flag in the paired TemperatureHandler object"""
-        if GPIO.input(self.ButtonPin) == False:
-            self.paired.increment_flag(1)
-            time.sleep(0.5)
+GPIO.setmode(GPIO.BCM)    # Number GPIOs by BCM
+GPIO.setwarnings(False)
 
-
-
-
-
-temp_obj = TemperatureHandler()
+but_obj =  ButtonHandler()
+temp_obj = TemperatureHandler(but_obj)
 LED_obj = LEDHandler()
-but_obj =  ButtonHandler(temp_obj)
 
-#run every 0.2s
-def buttoncheck(self):
+temp_obj.update_darksky()
+
+
+
+
+#@sched.scheduled_job('interval', seconds=1)
+def buttoncheck():
     but_obj.checkinput()
+
+#@sched.scheduled_job('cron', second='10, 15, 35, 45')
+def updateforecast():
+    temp_obj.update_darksky()
 
 #run every second
 def displaytemp():
+    """ updates and displays current temperatures """
     temp_obj.update_probetemp()
 
-    blue_light_bin = 0b00100000
-    red_light_bin  = 0b01000000
+    if but_obj.call_state() == 0:
+        LED_obj.lightup(0)
+        return
+
+
+    blue_light_bin   = 0b00100000
+    red_light_bin    = 0b01000000
+    alerts_light_bin = 0b10000000
 
 
     current_temp = int(temp_obj.call_temp())
@@ -178,25 +207,41 @@ def displaytemp():
     precip_flag = 0
     if temp_obj.call_precip_prob() >= 0.5: #gotta modify chance after u do the testings
         precip_flag = 1
+
+    redprobe_flag = 0
+    if temp_obj.call_probeflag() == False:
+        redprobe_flag = 1
     
+    alerts_flag = 0
+    if len(temp_obj.call_alerts()) != 0:
+        alerts_flag = 1
+    
+    data = current_temp + (precip_flag * (blue_light_bin) 
+                        + redprobe_flag * red_light_bin
+                        + alerts_flag * alerts_light_bin)
+     
 
-
-
+    LED_obj.lightup(data)
 
 
 
 if __name__ == '__main__':
     """
     TODO:
-    - combine all the classes together somehow
-    - make it so that they talk to each other and all that jazz
+    - add scheduler (lines 7, 164, and comments above functions)
     - make a readme
     """
 
 
     displaytemp()
 
-
+    start = time.time()
+    fin = time.time()
+    print(temp_obj.call_temp())
+    while fin-start < 10:
+        fin = time.time()
+        displaytemp()
+    
     '''
     lighttest = LEDHandler()
     lighttest.lightup(0x00)
