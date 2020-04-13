@@ -89,8 +89,11 @@ class TemperatureHandler:
         elif self.tempflag == 1:
             return self.forecast.currently.apparent_temperature
 
+    def call_precip_prob(self):
+        return self.forecast.daily.precip_probability
 
-
+    def call_flag(self):
+        return self.tempflag
 
 class LEDHandler:
     """Class that handles lighting up the LEDs"""
@@ -100,6 +103,7 @@ class LEDHandler:
         self.SRCLK = 27
 
         GPIO.setmode(GPIO.BCM)    # Number GPIOs by BCM
+        GPIO.setwarnings(False)
         GPIO.setup(self.SDI, GPIO.OUT)
         GPIO.setup(self.RCLK, GPIO.OUT)
         GPIO.setup(self.SRCLK, GPIO.OUT)
@@ -129,12 +133,12 @@ class LEDHandler:
         self._hc595_in(dat)
         self._hc595_out()
 
-
 class ButtonHandler:
     """Class that handles buttons. Paired with a TemperatureHandler object"""
     def __init__(self, TempHandler):
         self.ButtonPin = 25
         GPIO.setup(ButtonPin, GPIO.IN)
+        
         self.paired = TempHandler
 
     def checkinput(self):
@@ -143,8 +147,43 @@ class ButtonHandler:
         If pressed, increments flag in the paired TemperatureHandler object"""
         if GPIO.input(self.ButtonPin) == False:
             self.paired.increment_flag(1)
-            time.sleep(1)
-            
+            time.sleep(0.5)
+
+
+
+
+
+temp_obj = TemperatureHandler()
+LED_obj = LEDHandler()
+but_obj =  ButtonHandler(temp_obj)
+
+#run every 0.2s
+def buttoncheck(self):
+    but_obj.checkinput()
+
+#run every second
+def displaytemp():
+    temp_obj.update_probetemp()
+
+    blue_light_bin = 0b00100000
+    red_light_bin  = 0b01000000
+
+
+    current_temp = int(temp_obj.call_temp())
+    if current_temp < 0:
+        current_temp = 0 
+    elif current_temp > 31:
+        current_temp = 31
+
+    precip_flag = 0
+    if temp_obj.call_precip_prob() >= 0.5: #gotta modify chance after u do the testings
+        precip_flag = 1
+    
+
+
+
+
+
 
 if __name__ == '__main__':
     """
@@ -152,14 +191,24 @@ if __name__ == '__main__':
     - combine all the classes together somehow
     - make it so that they talk to each other and all that jazz
     - make a readme
-
-
     """
+
+
+    displaytemp()
+
+
+    '''
     lighttest = LEDHandler()
-    lighttest.lightup(0xff)
+    lighttest.lightup(0x00)
     GPIO.cleanup()
+    '''
     
-    
+    '''
+    try:
+        Do the job
+    except KeyboardInterrupt
+        stop the job from ap scheduler
+    '''
     
     
     """
