@@ -231,11 +231,6 @@ def startjob():
     
 
 if __name__ == '__main__':
-    """
-    TODO:
-    - make a readme
-    """
-
     try:
         startjob()
     except KeyboardInterrupt:
