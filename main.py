@@ -4,7 +4,8 @@ import RPi.GPIO as GPIO
 import time
 from darksky.api import DarkSky, DarkSkyAsync
 from darksky.types import languages, units, weather
-#from apscheduler.schedulers.blocking import BlockingScheduler
+from multiprocessing import Process
+from apscheduler.schedulers.blocking import BlockingScheduler
 
 
 
@@ -13,7 +14,9 @@ class ButtonHandler:
     def __init__(self):
         self.ButtonPin = 25
         GPIO.setup(self.ButtonPin, GPIO.IN)
-        self.buttonstate = 0
+        GPIO.add_event_detect(self.ButtonPin, GPIO.FALLING, bouncetime=200)
+        GPIO.add_event_callback(self.ButtonPin, self.incrementinput)
+        self.buttonstate = 1
 
         #button states
         #0 = off
@@ -23,11 +26,17 @@ class ButtonHandler:
     def checkinput(self):
         """
         Checks if button is pressed or not
-        If pressed, increments flag in the paired TemperatureHandler object"""
+        If pressed, increments flag in the paired TemperatureHandler object
+        """
         if GPIO.input(self.ButtonPin) == False:
-            self.buttonstate += 1
-            self.buttonstate = self.buttonstate % 3 #update modulus if more options pop up
+            self.incrementinput()
             time.sleep(0.5)
+
+    def incrementinput(self, _ = None):
+        """ Method that manually increments the button state"""
+        self.buttonstate += 1
+        self.buttonstate = self.buttonstate % 3 #update modulus if more options pop up
+
 
     def call_state(self):
         """Public method returning the current buttonstate"""
@@ -161,7 +170,7 @@ class LEDHandler:
         self._hc595_in(dat)
         self._hc595_out()
 
-#sched = BlockingScheduler()
+sched = BlockingScheduler()
 
 GPIO.setmode(GPIO.BCM)    # Number GPIOs by BCM
 GPIO.setwarnings(False)
@@ -173,30 +182,20 @@ LED_obj = LEDHandler()
 temp_obj.update_darksky()
 
 
-
-
-#@sched.scheduled_job('interval', seconds=1)
-def buttoncheck():
-    but_obj.checkinput()
-
-#@sched.scheduled_job('cron', second='10, 15, 35, 45')
+@sched.scheduled_job('cron', minute='10, 15, 35, 45')
 def updateforecast():
+    """ Job that updates darksky forecast every 15 minutes """
     temp_obj.update_darksky()
 
-#run every second
+@sched.scheduled_job('interval', seconds=1)
 def displaytemp():
     """ updates and displays current temperatures """
+
     temp_obj.update_probetemp()
-
-    if but_obj.call_state() == 0:
-        LED_obj.lightup(0)
-        return
-
 
     blue_light_bin   = 0b00100000
     red_light_bin    = 0b01000000
     alerts_light_bin = 0b10000000
-
 
     current_temp = int(temp_obj.call_temp())
     if current_temp < 0:
@@ -221,65 +220,24 @@ def displaytemp():
                         + alerts_flag * alerts_light_bin)
      
 
-    LED_obj.lightup(data)
+    if but_obj.call_state() == 0:
+        LED_obj.lightup(0)
+    else:
+        LED_obj.lightup(data)
 
 
+def startjob():
+    sched.start()
+    
 
 if __name__ == '__main__':
     """
     TODO:
-    - add scheduler (lines 7, 164, and comments above functions)
     - make a readme
     """
 
-
-    displaytemp()
-
-    start = time.time()
-    fin = time.time()
-    print(temp_obj.call_temp())
-    while fin-start < 10:
-        fin = time.time()
-        displaytemp()
-    
-    '''
-    lighttest = LEDHandler()
-    lighttest.lightup(0x00)
-    GPIO.cleanup()
-    '''
-    
-    '''
     try:
-        Do the job
-    except KeyboardInterrupt
-        stop the job from ap scheduler
-    '''
-    
-    
-    """
-    #include testing stuffs here
-    temptest = TemperatureHandler()
-    #print(test.call_temp())
-    print(temptest.call_temp())
-    temptest.update_probetemp()
-    print(temptest.call_temp())
-
-
-
-    buttest = ButtonHandler(temptest)
-    print('buttontestphase')
-    starttime = time.time()
-    finishtime = time.time()
-    while finishtime-starttime < 10:
-        finishtime = time.time()
-        buttest.checkinput()
-        print(temptest.tempflag)
-
-    
-
-
-
-    test.update_darksky()
-    print(test.forecast.currently.apparent_temperature)
-    print(test.forecast.currently.precip_probability) 
-    """
+        startjob()
+    except KeyboardInterrupt:
+        GPIO.cleanup()
+        print('Program closing, goodbye')
